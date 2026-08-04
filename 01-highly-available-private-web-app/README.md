@@ -367,24 +367,6 @@ AccessDenied when calling the ListObjectsV2 operation
 * Added object actions to the `bucket-name/*` ARN
 * Retested the upload and object-listing operations successfully
 
-### Load balancer metric confusion
-
-The resource was initially named `Project1-NLB`, but the deployed resource type was an Application Load Balancer.
-
-CloudWatch metrics were therefore available under:
-
-```text
-ApplicationELB
-```
-
-rather than:
-
-```text
-NetworkELB
-```
-
-The project documentation uses the correct resource type: **Application Load Balancer**.
-
 ---
 
 ## Cost Considerations
