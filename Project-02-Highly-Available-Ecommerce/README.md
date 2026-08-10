@@ -1,4 +1,4 @@
-# Project 02 — Highly Available E-Commerce Application on AWS
+# Project 02 â€” Highly Available E-Commerce Application on AWS
 
 [![AWS](https://img.shields.io/badge/AWS-ap--south--1-FF9900?logo=amazonwebservices&logoColor=white)](https://aws.amazon.com/)
 [![Node.js](https://img.shields.io/badge/Node.js-20-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org/)
@@ -7,7 +7,7 @@
 
 A production-style, three-tier e-commerce workload deployed across two Availability Zones. The project demonstrates network isolation, load balancing, horizontal scaling, managed database access, secret management, health checks, and keyless CI/CD authentication.
 
-> **Lab status:** The deployment was built, tested successfully through the Application Load Balancer, and then deleted to stop billing. The repository remains as a reproducible implementation record. CloudFront and WAF are documented as optional extensions; they were not part of the final tested path.
+> **Lab status:** The core deployment was built and tested successfully through the Application Load Balancer, then deleted to stop billing. This repository documents both the tested core and the complete target architecture, including Route 53, ACM, CloudFront, WAF, CloudWatch and SNS. Components not validated in the final lab are identified instead of being presented as completed evidence.
 
 ## Table of contents
 
@@ -35,16 +35,22 @@ A production-style, three-tier e-commerce workload deployed across two Availabil
 - A private Amazon RDS for MySQL database with TLS certificate verification.
 - Credentials stored in Secrets Manager and non-secret configuration in Parameter Store.
 - EC2 administration and deployment through Systems Manager instead of inbound SSH.
-- GitHub Actions authentication to AWS through OIDC—no long-lived AWS access keys.
+- GitHub Actions authentication to AWS through OIDCâ€”no long-lived AWS access keys.
 - Immutable release archives uploaded to S3 and deployed with SSM Run Command.
 - Application, target-group, and deployment health checks.
 
 ## Architecture
 
+![Highly Available E-Commerce Application on AWS](docs/architecture-diagram.svg)
+
+The downloadable PNG version is available at [`docs/architecture-diagram.png`](docs/architecture-diagram.png).
+
 ```mermaid
 flowchart TD
-    U[Users] --> DNS[Route 53 / ALB DNS]
-    DNS --> ALB[Application Load Balancer]
+    U[Users] --> DNS[Route 53]
+    DNS --> CF[CloudFront + ACM]
+    CF --> WAF[AWS WAF Web ACL]
+    WAF --> ALB[Application Load Balancer]
     subgraph VPC[Custom VPC 10.0.0.0/16]
       ALB --> A1[EC2 + Nginx + Node.js\nPrivate app subnet AZ-a]
       ALB --> A2[EC2 + Nginx + Node.js\nPrivate app subnet AZ-b]
@@ -65,10 +71,10 @@ flowchart TD
 
 ## Request and deployment flows
 
-Application request:
+Complete application request:
 
 ```text
-Client → Route 53 or ALB DNS → ALB → Nginx :80 → Node.js :3000 → RDS MySQL :3306
+Client â†’ Route 53 â†’ CloudFront/ACM â†’ WAF â†’ ALB â†’ Nginx :80 â†’ Node.js :3000 â†’ RDS MySQL :3306
 ```
 
 Deployment:
@@ -97,36 +103,41 @@ flowchart LR
 | Systems Manager | Session Manager, parameters, and remote deployment commands |
 | Secrets Manager | Stores database username and password |
 | IAM | Least-privilege EC2 and GitHub deployment roles |
-| Route 53 | Optional custom DNS alias to the ALB |
-| ACM | Optional TLS certificate for HTTPS |
+| Route 53 | Public DNS alias from the application hostname to CloudFront |
+| ACM | TLS certificates for CloudFront and, if used, the regional ALB listener |
 | CloudWatch | EC2, ALB, RDS, and application observability |
-| SNS | Optional alarm notifications |
-| CloudFront + WAF | Optional edge-security extension, not in final tested path |
+| SNS | Email notifications for alarms and scaling events |
+| CloudFront | Global HTTPS entry point, caching and origin delivery |
+| WAF | Managed protections, IP/rate rules and request visibility |
 
 ## Repository structure
 
 ```text
 Project-02-Highly-Available-Ecommerce/
-├── application/
-│   ├── public/                 # Browser UI
-│   ├── src/                    # Express app, configuration and DB code
-│   ├── tests/                  # Node test runner tests
-│   ├── package.json
-│   └── package-lock.json
-├── deployment/
-│   ├── config/
-│   │   ├── ecommerce.service   # systemd service
-│   │   └── nginx.conf          # Reverse proxy
-│   └── scripts/
-│       └── ssm_deploy.sh       # Idempotent instance deployment
-├── docs/
-│   ├── ARCHITECTURE.md
-│   ├── DEPLOYMENT.md
-│   ├── TROUBLESHOOTING.md
-│   └── CLEANUP.md
-├── .env.example
-├── .gitignore
-└── README.md
+â”œâ”€â”€ application/
+â”‚   â”œâ”€â”€ public/                 # Browser UI
+â”‚   â”œâ”€â”€ src/                    # Express app, configuration and DB code
+â”‚   â”œâ”€â”€ tests/                  # Node test runner tests
+â”‚   â”œâ”€â”€ package.json
+â”‚   â””â”€â”€ package-lock.json
+â”œâ”€â”€ deployment/
+â”‚   â”œâ”€â”€ config/
+â”‚   â”‚   â”œâ”€â”€ ecommerce.service   # systemd service
+â”‚   â”‚   â””â”€â”€ nginx.conf          # Reverse proxy
+â”‚   â””â”€â”€ scripts/
+â”‚       â””â”€â”€ ssm_deploy.sh       # Idempotent instance deployment
+â”œâ”€â”€ docs/
+â”‚   â”œâ”€â”€ ARCHITECTURE.md
+â”‚   â”œâ”€â”€ DEPLOYMENT.md
+â”‚   â”œâ”€â”€ EDGE-SECURITY.md
+â”‚   â”œâ”€â”€ MONITORING.md
+â”‚   â”œâ”€â”€ IAM-PERMISSIONS.md
+â”‚   â”œâ”€â”€ AWS-REFERENCES.md
+â”‚   â”œâ”€â”€ TROUBLESHOOTING.md
+â”‚   â””â”€â”€ CLEANUP.md
+â”œâ”€â”€ .env.example
+â”œâ”€â”€ .gitignore
+â””â”€â”€ README.md
 ```
 
 The workflow is stored at [`.github/workflows/ecommerce-deploy.yml`](../.github/workflows/ecommerce-deploy.yml).
@@ -145,8 +156,11 @@ The detailed console procedure is in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). A
 8. Create the target group, ALB, launch template and Auto Scaling group.
 9. Configure GitHub OIDC, the deployment IAM role and repository variables.
 10. Run the workflow and validate every target and endpoint.
-11. Optionally configure Route 53 + ACM HTTPS, CloudFront and WAF.
-12. Delete the lab resources when finished.
+11. Request the CloudFront ACM certificate in `us-east-1` and validate it with Route 53.
+12. Create CloudFront with the ALB origin, attach WAF and point Route 53 to CloudFront.
+13. Create CloudWatch alarms/dashboard and SNS notifications.
+14. Validate edge, application, database, scaling and monitoring behavior.
+15. Delete the lab resources when finished.
 
 ## CI/CD configuration
 
@@ -221,7 +235,11 @@ sudo nginx -t
 curl -i http://127.0.0.1/health
 ```
 
-See [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) for the OIDC, SSM, Nginx, RDS TLS and target-health issues encountered during the build.
+See [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) for the OIDC, SSM, Nginx, RDS TLS, CloudFront, WAF and target-health issues encountered during the build.
+
+The full edge and monitoring procedures are documented in [docs/EDGE-SECURITY.md](docs/EDGE-SECURITY.md) and [docs/MONITORING.md](docs/MONITORING.md). IAM trust and permission boundaries are in [docs/IAM-PERMISSIONS.md](docs/IAM-PERMISSIONS.md).
+
+Current service-specific guidance is linked from [docs/AWS-REFERENCES.md](docs/AWS-REFERENCES.md).
 
 ## Security decisions
 
@@ -262,8 +280,8 @@ This architecture is not guaranteed to be free-tier-only. NAT Gateway, ALB, publ
 Follow [docs/CLEANUP.md](docs/CLEANUP.md). The safe dependency order is:
 
 ```text
-Disable pipeline → ASG/EC2 → ALB/target group → RDS → S3 → NAT/EIP
-→ AMI/snapshot → IAM → security groups/subnets → route tables/IGW/VPC
+Disable pipeline â†’ ASG/EC2 â†’ ALB/target group â†’ RDS â†’ S3 â†’ NAT/EIP
+â†’ AMI/snapshot â†’ IAM â†’ security groups/subnets â†’ route tables/IGW/VPC
 ```
 
 Keep the Route 53 hosted zone and registered domain if they are shared with other projects.
@@ -280,4 +298,4 @@ Keep the Route 53 hosted zone and registered domain if they are shared with othe
 
 ## Author
 
-**Arul Kumar** — [GitHub](https://github.com/arulkumar27)
+**Arul Kumar** â€” [GitHub](https://github.com/arulkumar27)
