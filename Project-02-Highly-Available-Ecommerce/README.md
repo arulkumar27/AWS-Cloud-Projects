@@ -2,177 +2,382 @@
 
 [![AWS](https://img.shields.io/badge/AWS-ap--south--1-FF9900?logo=amazonwebservices&logoColor=white)](https://aws.amazon.com/)
 [![Node.js](https://img.shields.io/badge/Node.js-20-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org/)
-[![CI/CD](https://img.shields.io/badge/CI%2FCD-GitHub_Actions-2088FF?logo=githubactions&logoColor=white)](https://github.com/arulkumar27/AWS-Cloud-Projects/actions/workflows/ecommerce-deploy.yml)
-[![Infrastructure](https://img.shields.io/badge/Infrastructure-AWS_Console-232F3E?logo=amazonwebservices&logoColor=white)](#implementation-guide)
+[![GitHub Actions](https://img.shields.io/badge/CI%2FCD-GitHub_Actions-2088FF?logo=githubactions&logoColor=white)](https://github.com/arulkumar27/AWS-Cloud-Projects/actions/workflows/project-02-ecommerce-deploy.yml)
+[![Infrastructure](https://img.shields.io/badge/Infrastructure-AWS_Console-232F3E?logo=amazonwebservices&logoColor=white)](#implementation-overview)
 
-A production-style, three-tier e-commerce workload deployed across two Availability Zones. The project demonstrates network isolation, load balancing, horizontal scaling, managed database access, secret management, health checks, and keyless CI/CD authentication.
+A production-style, three-tier e-commerce application deployed on AWS across two Availability Zones.
 
-> **Lab status:** The core deployment was built and tested successfully through the Application Load Balancer, then deleted to stop billing. This repository documents both the tested core and the complete target architecture, including Route 53, ACM, CloudFront, WAF, CloudWatch and SNS. Components not validated in the final lab are identified instead of being presented as completed evidence.
+The project demonstrates network isolation, load balancing, Auto Scaling, private database connectivity, secret management, TLS-secured database communication, health checks and keyless CI/CD deployment using GitHub Actions and AWS Systems Manager.
 
-## Table of contents
+> **Lab status:** The core application infrastructure was built, deployed and successfully tested through the Application Load Balancer. The resources were later deleted to prevent continued AWS charges. Route 53, ACM, CloudFront, WAF, CloudWatch and SNS are included as the complete target architecture. Components that were not validated in the final lab are documented honestly rather than presented as completed evidence.
 
-- [What this project demonstrates](#what-this-project-demonstrates)
+## Table of Contents
+
+- [Project Objectives](#project-objectives)
 - [Architecture](#architecture)
-- [Request and deployment flows](#request-and-deployment-flows)
-- [AWS services](#aws-services)
-- [Repository structure](#repository-structure)
-- [Implementation guide](#implementation-guide)
-- [CI/CD configuration](#cicd-configuration)
-- [Validation](#validation)
-- [Operations and troubleshooting](#operations-and-troubleshooting)
-- [Security decisions](#security-decisions)
-- [Availability and limitations](#availability-and-limitations)
-- [Cost controls](#cost-controls)
+- [Implemented Architecture](#implemented-architecture)
+- [Complete Target Architecture](#complete-target-architecture)
+- [Network Design](#network-design)
+- [AWS Services](#aws-services)
+- [Application Request Flow](#application-request-flow)
+- [CI/CD Deployment Flow](#cicd-deployment-flow)
+- [Repository Structure](#repository-structure)
+- [Implementation Overview](#implementation-overview)
+- [GitHub Actions Configuration](#github-actions-configuration)
+- [Runtime Configuration](#runtime-configuration)
+- [Application Endpoints](#application-endpoints)
+- [Deployment Validation](#deployment-validation)
+- [Security Controls](#security-controls)
+- [Monitoring](#monitoring)
+- [Availability and Limitations](#availability-and-limitations)
+- [Cost Considerations](#cost-considerations)
+- [Troubleshooting](#troubleshooting)
 - [Cleanup](#cleanup)
-- [Lessons learned](#lessons-learned)
+- [Lessons Learned](#lessons-learned)
+- [Author](#author)
 
-## What this project demonstrates
+## Project Objectives
 
-- A custom VPC with public, private application, and isolated database subnets.
-- Multi-AZ placement of the ALB and EC2 Auto Scaling instances.
-- Internet-facing traffic terminating at an Application Load Balancer.
-- Nginx reverse proxying to a Node.js process managed by systemd.
-- A private Amazon RDS for MySQL database with TLS certificate verification.
-- Credentials stored in Secrets Manager and non-secret configuration in Parameter Store.
-- EC2 administration and deployment through Systems Manager instead of inbound SSH.
-- GitHub Actions authentication to AWS through OIDCâ€”no long-lived AWS access keys.
-- Immutable release archives uploaded to S3 and deployed with SSM Run Command.
-- Application, target-group, and deployment health checks.
+This project was created to demonstrate:
+
+- A custom AWS VPC with multiple network tiers.
+- Resources distributed across two Availability Zones.
+- Public, private application and isolated database subnets.
+- An internet-facing Application Load Balancer.
+- EC2 Auto Scaling across private application subnets.
+- Nginx as a reverse proxy for a Node.js application.
+- Amazon RDS for MySQL in isolated database subnets.
+- Database credentials stored in AWS Secrets Manager.
+- Non-secret runtime values stored in Systems Manager Parameter Store.
+- EC2 administration through Systems Manager instead of public SSH.
+- GitHub Actions authentication using AWS OIDC.
+- Deployment artifacts stored in a private, versioned S3 bucket.
+- Application deployment using Systems Manager Run Command.
+- CloudWatch monitoring and SNS alerting.
+- Route 53, ACM, CloudFront and AWS WAF edge-security design.
+- Dependency-aware AWS resource cleanup.
 
 ## Architecture
 
 ![Highly Available E-Commerce Application on AWS](docs/architecture-diagram.png)
 
-The downloadable PNG version is available at [`docs/architecture-diagram.png`](docs/architecture-diagram.png).
+## Implemented Architecture
 
-```mermaid
-flowchart TD
-    U[Users] --> DNS[Route 53]
-    DNS --> CF[CloudFront + ACM]
-    CF --> WAF[AWS WAF Web ACL]
-    WAF --> ALB[Application Load Balancer]
-    subgraph VPC[Custom VPC 10.0.0.0/16]
-      ALB --> A1[EC2 + Nginx + Node.js\nPrivate app subnet AZ-a]
-      ALB --> A2[EC2 + Nginx + Node.js\nPrivate app subnet AZ-b]
-      A1 --> RDS[(RDS MySQL\nIsolated DB subnets)]
-      A2 --> RDS
-    end
-    A1 --> SM[Secrets Manager / Parameter Store]
-    A2 --> SM
-```
-
-### Network plan
-
-| Tier | Availability Zone A | Availability Zone B | Routing |
-|---|---:|---:|---|
-| Public | `10.0.1.0/24` | `10.0.2.0/24` | Internet Gateway |
-| Private application | `10.0.11.0/24` | `10.0.12.0/24` | NAT Gateway per AZ |
-| Isolated database | `10.0.21.0/24` | `10.0.22.0/24` | Local VPC routes only |
-
-## Request and deployment flows
-
-Complete application request:
+The core infrastructure that was built and validated used this request path:
 
 ```text
-Client â†’ Route 53 â†’ CloudFront/ACM â†’ WAF â†’ ALB â†’ Nginx :80 â†’ Node.js :3000 â†’ RDS MySQL :3306
+User
+  ->
+Application Load Balancer
+  ->
+Nginx on EC2 port 80
+  ->
+Node.js on 127.0.0.1:3000
+  ->
+Amazon RDS for MySQL on port 3306
 ```
 
-Deployment:
-
-```mermaid
-flowchart LR
-    GH[GitHub push] --> GA[GitHub Actions]
-    GA --> OIDC[AWS OIDC / STS]
-    GA --> S3[S3 release archive]
-    GA --> SSM[SSM Run Command]
-    SSM --> EC2[Tagged EC2 instances]
-```
-
-## AWS services
-
-| Service | Purpose |
-|---|---|
-| VPC | Network boundary and subnet isolation |
-| Internet Gateway | Internet connectivity for public subnets |
-| NAT Gateway | Controlled outbound access from private app subnets |
-| EC2 | Runs Nginx and the Node.js application |
-| Auto Scaling | Maintains desired capacity across two AZs |
-| Application Load Balancer | Distributes HTTP traffic and performs health checks |
-| RDS for MySQL | Managed relational database in isolated subnets |
-| S3 | Stores versioned application release archives/assets |
-| Systems Manager | Session Manager, parameters, and remote deployment commands |
-| Secrets Manager | Stores database username and password |
-| IAM | Least-privilege EC2 and GitHub deployment roles |
-| Route 53 | Public DNS alias from the application hostname to CloudFront |
-| ACM | TLS certificates for CloudFront and, if used, the regional ALB listener |
-| CloudWatch | EC2, ALB, RDS, and application observability |
-| SNS | Email notifications for alarms and scaling events |
-| CloudFront | Global HTTPS entry point, caching and origin delivery |
-| WAF | Managed protections, IP/rate rules and request visibility |
-
-## Repository structure
+The implemented deployment path was:
 
 ```text
-Project-02-Highly-Available-Ecommerce/
-â”œâ”€â”€ application/
-â”‚   â”œâ”€â”€ public/                 # Browser UI
-â”‚   â”œâ”€â”€ src/                    # Express app, configuration and DB code
-â”‚   â”œâ”€â”€ tests/                  # Node test runner tests
-â”‚   â”œâ”€â”€ package.json
-â”‚   â””â”€â”€ package-lock.json
-â”œâ”€â”€ deployment/
-â”‚   â”œâ”€â”€ config/
-â”‚   â”‚   â”œâ”€â”€ ecommerce.service   # systemd service
-â”‚   â”‚   â””â”€â”€ nginx.conf          # Reverse proxy
-â”‚   â””â”€â”€ scripts/
-â”‚       â””â”€â”€ ssm_deploy.sh       # Idempotent instance deployment
-â”œâ”€â”€ docs/
-â”‚   â”œâ”€â”€ ARCHITECTURE.md
-â”‚   â”œâ”€â”€ DEPLOYMENT.md
-â”‚   â”œâ”€â”€ EDGE-SECURITY.md
-â”‚   â”œâ”€â”€ MONITORING.md
-â”‚   â”œâ”€â”€ IAM-PERMISSIONS.md
-â”‚   â”œâ”€â”€ AWS-REFERENCES.md
-â”‚   â”œâ”€â”€ TROUBLESHOOTING.md
-â”‚   â””â”€â”€ CLEANUP.md
-â”œâ”€â”€ .env.example
-â”œâ”€â”€ .gitignore
-â””â”€â”€ README.md
+GitHub
+  ->
+GitHub Actions
+  ->
+AWS OIDC and STS
+  ->
+Amazon S3 release artifact
+  ->
+AWS Systems Manager Run Command
+  ->
+EC2 Auto Scaling instances
 ```
 
-The workflow is stored at [`.github/workflows/ecommerce-deploy.yml`](../.github/workflows/ecommerce-deploy.yml).
+This project does not use AWS CodeBuild, CodePipeline or CodeDeploy.
 
-## Implementation guide
+## Complete Target Architecture
 
-The detailed console procedure is in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). At a high level:
+The complete production-style edge design is:
 
-1. Enable an AWS Budget before provisioning.
-2. Create the VPC, six subnets, route tables, IGW and NAT gateways.
-3. Create ALB, application and RDS security groups.
-4. Create the RDS subnet group, MySQL instance and database secret.
-5. Create the private S3 release bucket and SSM parameters.
-6. Create an EC2 IAM role and instance profile with SSM, S3, parameter and secret permissions.
-7. Prepare one EC2 instance, install Node.js/Nginx/SSM Agent and create a golden AMI.
-8. Create the target group, ALB, launch template and Auto Scaling group.
-9. Configure GitHub OIDC, the deployment IAM role and repository variables.
-10. Run the workflow and validate every target and endpoint.
-11. Request the CloudFront ACM certificate in `us-east-1` and validate it with Route 53.
-12. Create CloudFront with the ALB origin, attach WAF and point Route 53 to CloudFront.
-13. Create CloudWatch alarms/dashboard and SNS notifications.
-14. Validate edge, application, database, scaling and monitoring behavior.
-15. Delete the lab resources when finished.
+```text
+Users
+  ->
+Route 53
+  ->
+CloudFront with ACM certificate
+  ->
+AWS WAF Web ACL
+  ->
+Application Load Balancer
+  ->
+EC2 Auto Scaling instances
+  ->
+Amazon RDS for MySQL
+```
 
-## CI/CD configuration
+In this design:
 
-### GitHub repository variables
+- Route 53 provides public DNS resolution.
+- CloudFront provides the public HTTPS entry point.
+- ACM provides the TLS certificate.
+- AWS WAF filters malicious and excessive requests.
+- The ALB distributes traffic across application instances.
+- Auto Scaling maintains application capacity.
+- RDS stores application data in private database subnets.
 
-| Variable | Example | Secret? |
+The detailed edge implementation is available in [docs/EDGE-SECURITY.md](docs/EDGE-SECURITY.md).
+
+## Network Design
+
+### VPC
+
+```text
+VPC name: ecommerce-prod-vpc
+IPv4 CIDR: 10.0.0.0/16
+AWS Region: ap-south-1
+Availability Zones: ap-south-1a and ap-south-1b
+```
+
+### Subnets
+
+| Tier | Availability Zone A | Availability Zone B |
 |---|---|---|
-| `AWS_REGION` | `ap-south-1` | No |
-| `AWS_ROLE_ARN` | `arn:aws:iam::<ACCOUNT_ID>:role/ecommerce-github-actions-role` | No |
-| `DEPLOYMENT_BUCKET` | `ecommerce-prod-assets-<unique-suffix>` | No |
+| Public | `10.0.1.0/24` | `10.0.2.0/24` |
+| Private application | `10.0.11.0/24` | `10.0.12.0/24` |
+| Isolated database | `10.0.21.0/24` | `10.0.22.0/24` |
 
-The workflow requires:
+### Route Tables
+
+Public route table:
+
+```text
+VPC local route
+0.0.0.0/0 -> Internet Gateway
+```
+
+Private application route table for AZ A:
+
+```text
+VPC local route
+0.0.0.0/0 -> NAT Gateway in AZ A
+```
+
+Private application route table for AZ B:
+
+```text
+VPC local route
+0.0.0.0/0 -> NAT Gateway in AZ B
+```
+
+Database route table:
+
+```text
+VPC local route only
+No default internet route
+```
+
+AWS automatically creates a main route table with every VPC. The main route table was not used for workload subnet associations.
+
+### Security Groups
+
+| Security group | Inbound source | Port |
+|---|---|---:|
+| ALB security group | Internet or CloudFront origin traffic | 80/443 |
+| Application security group | ALB security group | 80 |
+| RDS security group | Application security group | 3306 |
+
+The EC2 application instances do not require public SSH access.
+
+## AWS Services
+
+| AWS service | Purpose |
+|---|---|
+| Amazon VPC | Network isolation |
+| Public subnets | Hosts ALB and NAT gateways |
+| Private application subnets | Hosts EC2 Auto Scaling instances |
+| Isolated database subnets | Hosts the RDS subnet group |
+| Internet Gateway | Public subnet internet connectivity |
+| NAT Gateway | Outbound connectivity for private instances |
+| EC2 | Runs Nginx and the Node.js application |
+| Auto Scaling | Maintains application capacity |
+| Application Load Balancer | Distributes requests and checks target health |
+| RDS for MySQL | Managed relational database |
+| S3 | Stores versioned deployment artifacts |
+| Systems Manager | Session Manager, Parameter Store and Run Command |
+| Secrets Manager | Stores database credentials |
+| IAM | Provides EC2 and GitHub deployment roles |
+| Route 53 | Public DNS |
+| ACM | TLS certificates |
+| CloudFront | Global HTTPS content delivery |
+| AWS WAF | Managed and rate-based request filtering |
+| CloudWatch | Metrics, alarms, dashboards and logs |
+| SNS | Email alarm notifications |
+| AWS Budgets | Cost alerts |
+
+## Application Request Flow
+
+```text
+Client request
+  ->
+Route 53 resolves the application hostname
+  ->
+CloudFront terminates public HTTPS
+  ->
+AWS WAF inspects the request
+  ->
+Application Load Balancer selects a healthy target
+  ->
+Nginx receives the request on port 80
+  ->
+Nginx forwards the request to Node.js on 127.0.0.1:3000
+  ->
+Node.js retrieves credentials from Secrets Manager
+  ->
+Node.js connects to RDS using verified TLS
+  ->
+The response returns through the same request path
+```
+
+## CI/CD Deployment Flow
+
+The actual project pipeline is:
+
+```text
+Developer pushes Project 02 changes
+  ->
+GitHub Actions starts
+  ->
+Application dependencies are installed
+  ->
+Automated tests run
+  ->
+Production dependencies are packaged
+  ->
+GitHub authenticates to AWS using OIDC
+  ->
+Release archive uploads to S3
+  ->
+Systems Manager sends commands to tagged EC2 instances
+  ->
+EC2 downloads and installs the release
+  ->
+systemd restarts the Node.js application
+  ->
+The deployment script validates /health
+```
+
+Workflow location:
+
+```text
+.github/workflows/project-02-ecommerce-deploy.yml
+```
+
+The workflow belongs to Project 02 because it contains:
+
+```yaml
+name: Deploy Project 02 Ecommerce
+
+env:
+  PROJECT_DIR: Project-02-Highly-Available-Ecommerce
+
+on:
+  push:
+    paths:
+      - "Project-02-Highly-Available-Ecommerce/**"
+      - ".github/workflows/project-02-ecommerce-deploy.yml"
+```
+
+Changes to another project folder do not trigger this workflow.
+
+## Repository Structure
+
+```text
+AWS-Cloud-Projects/
+|
+|-- .github/
+|   `-- workflows/
+|       `-- project-02-ecommerce-deploy.yml
+|
+`-- Project-02-Highly-Available-Ecommerce/
+    |
+    |-- application/
+    |   |-- public/
+    |   |   |-- index.html
+    |   |   |-- app.js
+    |   |   `-- styles.css
+    |   |
+    |   |-- src/
+    |   |   |-- app.js
+    |   |   |-- config.js
+    |   |   |-- db.js
+    |   |   `-- server.js
+    |   |
+    |   |-- tests/
+    |   |   `-- health.test.js
+    |   |
+    |   |-- package.json
+    |   `-- package-lock.json
+    |
+    |-- deployment/
+    |   |-- config/
+    |   |   |-- ecommerce.service
+    |   |   `-- nginx.conf
+    |   |
+    |   `-- scripts/
+    |       `-- ssm_deploy.sh
+    |
+    |-- docs/
+    |   |-- architecture-diagram.png
+    |   |-- ARCHITECTURE.md
+    |   |-- AWS-REFERENCES.md
+    |   |-- CLEANUP.md
+    |   |-- DEPLOYMENT.md
+    |   |-- EDGE-SECURITY.md
+    |   |-- IAM-PERMISSIONS.md
+    |   |-- MONITORING.md
+    |   `-- TROUBLESHOOTING.md
+    |
+    |-- .env.example
+    |-- .gitignore
+    |-- README.md
+    `-- SECURITY.md
+```
+
+## Implementation Overview
+
+The detailed AWS Console guide is available in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+
+High-level implementation:
+
+1. Create an AWS Budget and billing alert.
+2. Create the custom VPC.
+3. Create six subnets across two Availability Zones.
+4. Create and attach the Internet Gateway.
+5. Create NAT gateways and Elastic IP addresses.
+6. Configure public, private application and database route tables.
+7. Create ALB, application and database security groups.
+8. Create the RDS subnet group.
+9. Create the private MySQL RDS database.
+10. Store database credentials in Secrets Manager.
+11. Create the private, encrypted and versioned S3 bucket.
+12. Create Systems Manager Parameter Store values.
+13. Create the EC2 IAM role and instance profile.
+14. Prepare the EC2 golden image.
+15. Create the target group and Application Load Balancer.
+16. Create the EC2 launch template.
+17. Create the Auto Scaling group across private subnets.
+18. Configure GitHub OIDC.
+19. Create the GitHub Actions deployment role.
+20. Configure GitHub repository variables.
+21. Run the GitHub Actions deployment.
+22. Validate the application and target health.
+23. Configure Route 53, ACM, CloudFront and WAF for the complete edge design.
+24. Configure CloudWatch alarms and SNS notifications.
+25. Delete lab resources after completing validation.
+
+## GitHub Actions Configuration
+
+### Required permissions
 
 ```yaml
 permissions:
@@ -180,122 +385,344 @@ permissions:
   id-token: write
 ```
 
-The IAM role trust policy must restrict the GitHub issuer, audience, repository and branch. Tags do **not** control OIDC authentication. Never store AWS access keys in GitHub for this workflow.
+### Repository variables
 
-### Runtime parameters
-
-| Parameter | Value type |
+| Variable | Example |
 |---|---|
-| `/ecommerce/prod/db-secret-arn` | Secrets Manager ARN |
-| `/ecommerce/prod/db-host` | RDS endpoint hostname |
-| `/ecommerce/prod/assets-bucket` | S3 bucket name |
+| `AWS_REGION` | `ap-south-1` |
+| `AWS_ROLE_ARN` | `arn:aws:iam::<ACCOUNT_ID>:role/ecommerce-github-actions-role` |
+| `DEPLOYMENT_BUCKET` | `ecommerce-prod-assets-<UNIQUE_SUFFIX>` |
 
-Database credentials stay in Secrets Manager. The deployment script writes only runtime references to `/etc/ecommerce/environment`.
+These are configuration values and not database passwords.
 
-## Validation
+Do not store permanent AWS access keys in GitHub.
+
+### EC2 deployment tags
+
+The workflow sends SSM commands to instances containing both tags:
+
+```text
+Project=ecommerce-prod
+Environment=production
+```
+
+Configure Auto Scaling to propagate these tags to every new instance.
+
+## Runtime Configuration
+
+The deployment script reads:
+
+```text
+/ecommerce/prod/db-secret-arn
+/ecommerce/prod/db-host
+/ecommerce/prod/assets-bucket
+```
+
+Environment file created on EC2:
+
+```text
+/etc/ecommerce/environment
+```
+
+Example values:
+
+```text
+NODE_ENV=production
+PORT=3000
+AWS_REGION=ap-south-1
+DB_NAME=ecommerce
+DB_HOST=<RDS_ENDPOINT>
+DB_CA_PATH=/etc/ecommerce/global-bundle.pem
+DB_SECRET_ARN=<SECRET_ARN>
+ASSETS_BUCKET=<S3_BUCKET>
+```
+
+Database username and password are retrieved from Secrets Manager at runtime.
+
+They are not committed to GitHub.
+
+## Application Endpoints
+
+### Liveness endpoint
+
+```text
+GET /health
+```
+
+Expected response:
+
+```json
+{
+  "status": "healthy",
+  "service": "ecommerce-api"
+}
+```
+
+This endpoint confirms that the Node.js application process is running.
+
+### Readiness endpoint
+
+```text
+GET /ready
+```
+
+This endpoint checks the database connection.
+
+Successful response:
+
+```json
+{
+  "status": "ready",
+  "database": "connected"
+}
+```
+
+### Products endpoint
+
+```text
+GET /api/products
+```
+
+This endpoint retrieves products from Amazon RDS.
+
+## Deployment Validation
 
 Run tests locally:
 
 ```bash
-cd application
+cd Project-02-Highly-Available-Ecommerce/application
 npm ci
 npm test
 ```
 
-After deployment:
+After deployment, test the ALB:
 
 ```bash
 curl -i http://<ALB-DNS-NAME>/health
+curl -i http://<ALB-DNS-NAME>/ready
 curl -i http://<ALB-DNS-NAME>/api/products
 ```
 
-Expected health response:
+For the complete edge design:
 
-```json
-{"status":"healthy","service":"ecommerce-api"}
+```bash
+curl -I https://<APPLICATION-HOSTNAME>/
+curl -i https://<APPLICATION-HOSTNAME>/health
+curl -i https://<APPLICATION-HOSTNAME>/api/products
 ```
 
-Also verify:
+Also confirm:
 
-- GitHub Actions job is green.
-- Every desired EC2 instance is `Online` in Systems Manager.
-- Target group shows all active targets as `healthy`.
-- Auto Scaling desired/min/max values are correct.
-- The storefront loads products from RDS.
-- Stopping one application instance does not make the site unavailable.
+- GitHub Actions workflow completes successfully.
+- EC2 instances appear as Online in Systems Manager.
+- All expected target-group instances are healthy.
+- Auto Scaling desired and in-service capacities match.
+- The application loads products from RDS.
+- RDS is not publicly accessible.
+- S3 Block Public Access is enabled.
+- SNS notifications are confirmed.
+- CloudWatch metrics and alarms are visible.
 
-## Operations and troubleshooting
+## Security Controls
 
-Common diagnostic commands:
+Security controls implemented or documented include:
+
+- No permanent AWS keys in GitHub.
+- GitHub OIDC with temporary STS credentials.
+- EC2 application instances in private subnets.
+- No public SSH requirement.
+- Session Manager for administrative access.
+- RDS in isolated database subnets.
+- Security-group-to-security-group rules.
+- Database credentials in Secrets Manager.
+- Non-secret configuration in Parameter Store.
+- Private and versioned S3 bucket.
+- RDS TLS certificate verification.
+- systemd service hardening.
+- CloudFront HTTPS.
+- AWS WAF managed and rate-based rules.
+- CloudWatch monitoring and SNS alerting.
+
+See [SECURITY.md](SECURITY.md) for the complete security policy.
+
+See [docs/IAM-PERMISSIONS.md](docs/IAM-PERMISSIONS.md) for IAM responsibilities.
+
+## Monitoring
+
+Recommended monitoring includes:
+
+- ALB healthy and unhealthy host count.
+- ALB target 5XX responses.
+- ALB target response time.
+- EC2 CPU utilization.
+- Auto Scaling desired and in-service capacity.
+- RDS CPU utilization.
+- RDS database connections.
+- RDS free storage.
+- CloudFront 4XX and 5XX error rates.
+- WAF allowed, counted and blocked requests.
+- SNS email notifications.
+
+See [docs/MONITORING.md](docs/MONITORING.md).
+
+## Availability and Limitations
+
+### Availability features
+
+- ALB deployed across two Availability Zones.
+- Application instances distributed across two private subnets.
+- Auto Scaling replaces unhealthy EC2 instances.
+- Target-group health checks remove unhealthy targets.
+- Separate NAT Gateway routes improve Availability Zone independence.
+
+### Lab limitations
+
+- The lab used Single-AZ RDS because of account and free-plan restrictions.
+- Single-AZ RDS remains a database single point of failure.
+- Production should use Multi-AZ RDS.
+- SSM Run Command deploys to matching instances but is not a complete blue/green deployment system.
+- Infrastructure was created manually through the AWS Console.
+- Production environments should use Terraform, AWS CDK or CloudFormation.
+- The application currently creates and seeds its database table during startup.
+- Production applications should use a database migration tool.
+- Automated tests currently cover only the liveness endpoint.
+- Additional readiness, API, database and error-handling tests should be added.
+- Content Security Policy is currently disabled in the application and should be configured for production.
+- CloudFront, WAF and the complete edge path were documented as the target design but were not part of the final validated core deployment.
+
+## Cost Considerations
+
+This architecture is not guaranteed to remain within the AWS Free Tier.
+
+The following services can generate charges:
+
+- NAT Gateway
+- Application Load Balancer
+- Public IPv4 addresses
+- EC2
+- RDS
+- S3
+- Secrets Manager
+- Route 53
+- CloudFront
+- AWS WAF
+- CloudWatch
+- Data transfer
+
+AWS credits reduce the bill but do not make resources free.
+
+Cost-control actions:
+
+- Create AWS Budget alerts before provisioning.
+- Use the smallest account-eligible EC2 and RDS sizes.
+- Keep lab environments active only when needed.
+- Delete NAT gateways early during cleanup.
+- Release unused Elastic IP addresses.
+- Delete unattached EBS volumes.
+- Delete unused snapshots and AMIs.
+- Empty versioned S3 buckets before deletion.
+- Review Billing and Cost Explorer after cleanup.
+- Remember that billing information can take time to update.
+
+## Troubleshooting
+
+Useful EC2 commands:
 
 ```bash
 sudo systemctl status ecommerce.service --no-pager -l
 sudo journalctl -u ecommerce.service --no-pager -n 100
 sudo nginx -t
 curl -i http://127.0.0.1/health
+curl -i http://127.0.0.1/ready
+curl -i http://127.0.0.1/api/products
 ```
 
-See [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) for the OIDC, SSM, Nginx, RDS TLS, CloudFront, WAF and target-health issues encountered during the build.
+Common issues documented include:
 
-The full edge and monitoring procedures are documented in [docs/EDGE-SECURITY.md](docs/EDGE-SECURITY.md) and [docs/MONITORING.md](docs/MONITORING.md). IAM trust and permission boundaries are in [docs/IAM-PERMISSIONS.md](docs/IAM-PERMISSIONS.md).
+- GitHub OIDC trust-policy errors.
+- SSM commands remaining Pending or InProgress.
+- Missing systemd service.
+- Database connections falling back to `127.0.0.1:3306`.
+- RDS certificate-chain errors.
+- Conflicting Nginx default-server configuration.
+- Unhealthy and draining ALB targets.
+- CloudFront origin errors.
+- Incorrect CloudFront API caching.
+- AWS WAF false-positive blocks.
+- Route 53 and ACM configuration problems.
 
-Current service-specific guidance is linked from [docs/AWS-REFERENCES.md](docs/AWS-REFERENCES.md).
-
-## Security decisions
-
-- EC2 instances have no direct inbound SSH requirement.
-- Application instances accept HTTP only from the ALB security group.
-- RDS accepts MySQL only from the application security group.
-- Database subnets have no default internet route.
-- GitHub receives short-lived AWS credentials through OIDC.
-- S3 public access is blocked and releases are versioned.
-- RDS traffic uses the AWS global CA bundle with certificate verification.
-- The systemd service runs as `ec2-user` with additional hardening options.
-- Secrets, private keys, account IDs, endpoints and real ARNs must not be committed.
-
-See [SECURITY.md](SECURITY.md) for disclosure and credential-handling guidance.
-
-## Availability and limitations
-
-- The ALB and application tier span two Availability Zones.
-- Auto Scaling replaces unhealthy EC2 instances.
-- The lab used a **Single-AZ RDS instance** because of account/free-plan constraints. That database remains a single point of failure; production should use Multi-AZ RDS.
-- Two NAT gateways improve AZ independence but generate hourly and data-processing charges.
-- SSM Run Command deploys to all matching instances, but it is not a complete rolling/blue-green deployment controller.
-- Infrastructure was created manually in the AWS Console. Production environments should use Terraform, AWS CDK or CloudFormation for repeatability.
-
-## Cost controls
-
-This architecture is not guaranteed to be free-tier-only. NAT Gateway, ALB, public IPv4, RDS, Route 53, Secrets Manager, CloudWatch and data transfer can incur charges. Credits reduce the bill but do not make resources free.
-
-- Create AWS Budgets alerts before provisioning.
-- Use the smallest eligible EC2/RDS sizes for a short-lived lab.
-- Delete NAT gateways early during teardown.
-- Release unattached Elastic IPs and delete orphaned EBS volumes/snapshots.
-- Empty versioned S3 buckets before deletion.
-- Recheck Billing, Cost Explorer and Free Tier after cleanup; billing data can lag.
+See [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
 
 ## Cleanup
 
-Follow [docs/CLEANUP.md](docs/CLEANUP.md). The safe dependency order is:
+Follow the dependency-aware guide in [docs/CLEANUP.md](docs/CLEANUP.md).
+
+Recommended order:
 
 ```text
-Disable pipeline â†’ ASG/EC2 â†’ ALB/target group â†’ RDS â†’ S3 â†’ NAT/EIP
-â†’ AMI/snapshot â†’ IAM â†’ security groups/subnets â†’ route tables/IGW/VPC
+Disable GitHub Actions deployment
+  ->
+Set Auto Scaling capacity to zero
+  ->
+Delete Auto Scaling and EC2 resources
+  ->
+Delete ALB and target group
+  ->
+Delete RDS and database configuration
+  ->
+Empty and delete S3
+  ->
+Delete CloudFront, WAF and project DNS records
+  ->
+Delete NAT gateways and release Elastic IPs
+  ->
+Delete AMI and snapshot
+  ->
+Delete CloudWatch and SNS resources
+  ->
+Delete IAM roles
+  ->
+Delete security groups and subnets
+  ->
+Delete route tables and Internet Gateway
+  ->
+Delete the VPC
 ```
 
-Keep the Route 53 hosted zone and registered domain if they are shared with other projects.
+Do not delete a shared Route 53 hosted zone or registered domain.
 
-## Lessons learned
+## Lessons Learned
 
-- A green build is not a successful deployment; target health and application logs must also be checked.
-- OIDC failures are usually trust-policy subject/audience mismatches, not missing tags.
-- Auto Scaling instance tags should be configured to propagate at launch.
-- `127.0.0.1:3306` means the application did not receive the RDS host configuration.
-- TLS verification requires the RDS CA bundle inside every immutable release target.
-- A default Nginx server can conflict with a second `server_name _` block.
-- Teardown is part of the project: dependency-aware cleanup prevents continuing charges.
+- A successful build does not guarantee a healthy deployment.
+- Application logs and target health must be checked after deployment.
+- GitHub OIDC failures are normally caused by audience or subject mismatches.
+- Resource tags do not fix OIDC trust-policy failures.
+- Auto Scaling tags must propagate to new instances.
+- SSM requires online managed instances and outbound AWS API connectivity.
+- A missing database hostname can cause connections to fall back to localhost.
+- RDS certificate verification requires the AWS RDS CA bundle.
+- Multiple Nginx default-server configurations can conflict.
+- Dynamic API responses require careful CloudFront cache policies.
+- WAF rules should be evaluated in Count mode before Block mode.
+- Edge services must not be presented as tested when only the core ALB path was validated.
+- AWS cleanup is part of the project lifecycle.
+
+## Documentation
+
+- [Architecture Decisions](docs/ARCHITECTURE.md)
+- [AWS Console Deployment](docs/DEPLOYMENT.md)
+- [Route 53, ACM, CloudFront and WAF](docs/EDGE-SECURITY.md)
+- [IAM Roles and Permissions](docs/IAM-PERMISSIONS.md)
+- [CloudWatch and SNS Monitoring](docs/MONITORING.md)
+- [Troubleshooting Runbook](docs/TROUBLESHOOTING.md)
+- [Cleanup Checklist](docs/CLEANUP.md)
+- [Official References](docs/AWS-REFERENCES.md)
+- [Security Policy](SECURITY.md)
+- [GitHub Actions Workflow](../.github/workflows/project-02-ecommerce-deploy.yml)
 
 ## Author
 
-**Arul Kumar** â€” [GitHub](https://github.com/arulkumar27)
+**Arul Kumar**
+
+- GitHub: [arulkumar27](https://github.com/arulkumar27)
+- Repository: [AWS-Cloud-Projects](https://github.com/arulkumar27/AWS-Cloud-Projects)
