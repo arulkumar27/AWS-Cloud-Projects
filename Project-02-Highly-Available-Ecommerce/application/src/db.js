@@ -13,7 +13,7 @@ async function readDatabaseSecret(config) {
 async function createPool(config) {
   const secret = await readDatabaseSecret(config);
   const pool = mysql.createPool({
-    host: secret.host,
+    host: config.dbHost || secret.host,
     port: Number(secret.port || 3306),
     user: secret.username,
     password: secret.password,
