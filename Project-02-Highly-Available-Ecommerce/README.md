@@ -1,4 +1,4 @@
-# Project 02 â€” Highly Available E-Commerce Application on AWS
+# Project 02 - Highly Available E-Commerce Application on AWS
 
 [![AWS](https://img.shields.io/badge/AWS-ap--south--1-FF9900?logo=amazonwebservices&logoColor=white)](https://aws.amazon.com/)
 [![Node.js](https://img.shields.io/badge/Node.js-20-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org/)
@@ -41,7 +41,7 @@ A production-style, three-tier e-commerce workload deployed across two Availabil
 
 ## Architecture
 
-![Highly Available E-Commerce Application on AWS](docs/architecture-diagram.svg)
+![Highly Available E-Commerce Application on AWS](docs/architecture-diagram.png)
 
 The downloadable PNG version is available at [`docs/architecture-diagram.png`](docs/architecture-diagram.png).
 
