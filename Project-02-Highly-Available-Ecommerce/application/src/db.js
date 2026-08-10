@@ -1,19 +1,51 @@
 'use strict';
 
+const fs = require('node:fs');
 const mysql = require('mysql2/promise');
-const { SecretsManagerClient, GetSecretValueCommand } = require('@aws-sdk/client-secrets-manager');
+
+const {
+  SecretsManagerClient,
+  GetSecretValueCommand
+} = require('@aws-sdk/client-secrets-manager');
 
 async function readDatabaseSecret(config) {
-  if (!config.secretId) throw new Error('DB_SECRET_ARN is not configured');
-  const client = new SecretsManagerClient({ region: config.region });
-  const response = await client.send(new GetSecretValueCommand({ SecretId: config.secretId }));
+  if (!config.secretId) {
+    throw new Error('DB_SECRET_ARN is not configured');
+  }
+
+  const client = new SecretsManagerClient({
+    region: config.region
+  });
+
+  const response = await client.send(
+    new GetSecretValueCommand({
+      SecretId: config.secretId
+    })
+  );
+
   return JSON.parse(response.SecretString);
 }
 
 async function createPool(config) {
   const secret = await readDatabaseSecret(config);
+
+  const databaseHost = config.dbHost || secret.host;
+
+  if (!databaseHost) {
+    throw new Error('Database host is not configured');
+  }
+
+  if (!config.dbCaPath) {
+    throw new Error('Database CA certificate path is not configured');
+  }
+
+  const rdsCaCertificate = fs.readFileSync(
+    config.dbCaPath,
+    'utf8'
+  );
+
   const pool = mysql.createPool({
-    host: config.dbHost || secret.host,
+    host: databaseHost,
     port: Number(secret.port || 3306),
     user: secret.username,
     password: secret.password,
@@ -22,30 +54,59 @@ async function createPool(config) {
     connectionLimit: 10,
     queueLimit: 0,
     enableKeepAlive: true,
-    ssl: { rejectUnauthorized: true }
+    ssl: {
+      ca: rdsCaCertificate,
+      rejectUnauthorized: true
+    }
   });
 
-  await pool.query(`CREATE TABLE IF NOT EXISTS products (
-    id INT PRIMARY KEY AUTO_INCREMENT,
-    name VARCHAR(120) NOT NULL,
-    description VARCHAR(500) NOT NULL,
-    price DECIMAL(10,2) NOT NULL,
-    image_key VARCHAR(255),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-  )`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS products (
+      id INT PRIMARY KEY AUTO_INCREMENT,
+      name VARCHAR(120) NOT NULL,
+      description VARCHAR(500) NOT NULL,
+      price DECIMAL(10,2) NOT NULL,
+      image_key VARCHAR(255),
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
 
-  const [rows] = await pool.query('SELECT COUNT(*) AS count FROM products');
+  const [rows] = await pool.query(
+    'SELECT COUNT(*) AS count FROM products'
+  );
+
   if (Number(rows[0].count) === 0) {
     await pool.query(
       'INSERT INTO products (name, description, price, image_key) VALUES ?',
-      [[
-        ['Cloud Backpack', 'Weather-resistant everyday backpack', 2499.00, null],
-        ['DevOps Hoodie', 'Premium cotton engineering hoodie', 1799.00, null],
-        ['Mechanical Keyboard', 'Compact hot-swappable keyboard', 5999.00, null]
-      ]]
+      [
+        [
+          [
+            'Cloud Backpack',
+            'Weather-resistant everyday backpack',
+            2499.00,
+            null
+          ],
+          [
+            'DevOps Hoodie',
+            'Premium cotton engineering hoodie',
+            1799.00,
+            null
+          ],
+          [
+            'Mechanical Keyboard',
+            'Compact hot-swappable keyboard',
+            5999.00,
+            null
+          ]
+        ]
+      ]
     );
   }
+
   return pool;
 }
 
-module.exports = { createPool, readDatabaseSecret };
+module.exports = {
+  createPool,
+  readDatabaseSecret
+};
