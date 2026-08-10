@@ -1,0 +1,31 @@
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      nodejs: 20
+    commands:
+      - cd "$CODEBUILD_SRC_DIR/highly-available-ecommerce-platform/application"
+      - npm ci
+  pre_build:
+    commands:
+      - npm test
+  build:
+    commands:
+      - npm prune --omit=dev
+      - mkdir -p "$CODEBUILD_SRC_DIR/artifact/config"
+      - cp -R src public node_modules package.json package-lock.json "$CODEBUILD_SRC_DIR/artifact/"
+      - cp "$CODEBUILD_SRC_DIR/highly-available-ecommerce-platform/deployment/appspec.yml" "$CODEBUILD_SRC_DIR/artifact/appspec.yml"
+      - cp -R "$CODEBUILD_SRC_DIR/highly-available-ecommerce-platform/deployment/scripts" "$CODEBUILD_SRC_DIR/artifact/scripts"
+      - cp "$CODEBUILD_SRC_DIR/highly-available-ecommerce-platform/deployment/config/ecommerce.service" "$CODEBUILD_SRC_DIR/artifact/config/ecommerce.service"
+      - cp "$CODEBUILD_SRC_DIR/highly-available-ecommerce-platform/deployment/config/nginx.conf" "$CODEBUILD_SRC_DIR/artifact/config/nginx.conf"
+
+artifacts:
+  base-directory: artifact
+  files:
+    - '**/*'
+  discard-paths: no
+
+cache:
+  paths:
+    - '/root/.npm/**/*'
