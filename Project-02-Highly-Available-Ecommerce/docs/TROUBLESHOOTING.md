@@ -81,3 +81,119 @@ curl -i http://127.0.0.1/health
 curl -i http://127.0.0.1/api/products
 ```
 
+## CloudFront Returns 502 or 504
+
+Check:
+
+- ALB targets are healthy.
+- CloudFront origin is the correct ALB DNS name.
+- CloudFront origin protocol matches the ALB listener.
+- The ALB security group allows CloudFront origin traffic.
+- The application responds before the CloudFront timeout.
+- The ALB certificate matches the origin hostname when HTTPS is used.
+
+Test the ALB directly:
+
+```bash
+curl -i http://<ALB-DNS-NAME>/health
+curl -i http://<ALB-DNS-NAME>/ready
+```
+
+## CloudFront Returns Stale API Data
+
+Disable caching for:
+
+```text
+/api/*
+/health
+/ready
+```
+
+Review the CloudFront cache policy, origin request policy, query strings, cookies and forwarded headers.
+
+## AWS WAF Blocks Legitimate Requests
+
+1. Open the WAF Web ACL.
+2. Review sampled requests.
+3. Identify the exact blocking rule.
+4. Change the affected rule to `Count` during investigation.
+5. Exclude only the confirmed false-positive subrule.
+6. Test again before returning the rule to `Block`.
+
+Do not disable the complete WAF Web ACL without investigation.
+
+## Route 53 Hostname Does Not Work
+
+Confirm:
+
+- The record exists in the correct public hosted zone.
+- The A alias points to CloudFront.
+- CloudFront status is `Deployed`.
+- The application hostname is configured as a CloudFront alternate domain name.
+- The ACM certificate matches the hostname.
+- The CloudFront ACM certificate was created in `us-east-1`.
+
+Test DNS:
+
+```bash
+nslookup <APPLICATION-HOSTNAME>
+```
+
+## ACM Certificate Remains Pending Validation
+
+Check:
+
+- The ACM validation CNAME exists in Route 53.
+- The CNAME name and value exactly match ACM.
+- The certificate was requested in `us-east-1` for CloudFront.
+- Duplicate hosted zones are not causing the record to be added to the wrong zone.
+
+Keep the validation CNAME record after the certificate is issued so ACM can renew it.
+
+## Application Is Healthy but Products Do Not Load
+
+The `/health` endpoint checks only the Node.js process.
+
+Check database readiness:
+
+```bash
+curl -i http://127.0.0.1/ready
+```
+
+Then inspect:
+
+```bash
+sudo journalctl -u ecommerce.service --no-pager -n 100
+sudo grep '^DB_HOST=' /etc/ecommerce/environment
+```
+
+Confirm:
+
+- The RDS endpoint is correct.
+- The RDS security group allows port 3306 from the application security group.
+- The database secret contains the correct username and password.
+- The RDS CA bundle exists.
+- The database is available.
+
+## GitHub Workflow Does Not Appear
+
+The workflow must be stored at the repository root:
+
+```text
+.github/workflows/project-02-ecommerce-deploy.yml
+```
+
+GitHub does not detect workflows stored inside:
+
+```text
+Project-02-Highly-Available-Ecommerce/.github/workflows/
+```
+
+The workflow trigger must include:
+
+```yaml
+paths:
+  - "Project-02-Highly-Available-Ecommerce/**"
+  - ".github/workflows/project-02-ecommerce-deploy.yml"
+```
+
