@@ -20,6 +20,7 @@ cp "$RELEASE_DIR/package.json" "$APP_DIR/package.json"
 cp "$RELEASE_DIR/package-lock.json" "$APP_DIR/package-lock.json"
 
 install -d -m 0755 "$APP_DIR/config"
+
 cp "$RELEASE_DIR/config/ecommerce.service" \
   "$APP_DIR/config/ecommerce.service"
 
@@ -50,12 +51,21 @@ ASSETS_BUCKET=$(aws ssm get-parameter \
 
 install -d -m 0750 -o root -g ec2-user /etc/ecommerce
 
+echo "Installing the Amazon RDS CA bundle"
+
+curl --fail --silent --show-error \
+  "https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem" \
+  --output /etc/ecommerce/global-bundle.pem
+
+chmod 0644 /etc/ecommerce/global-bundle.pem
+
 cat > /etc/ecommerce/environment <<EOF
 NODE_ENV=production
 PORT=3000
 AWS_REGION=$REGION
 DB_NAME=ecommerce
 DB_HOST=$DB_HOST
+DB_CA_PATH=/etc/ecommerce/global-bundle.pem
 DB_SECRET_ARN=$SECRET_ARN
 ASSETS_BUCKET=$ASSETS_BUCKET
 EOF
@@ -89,7 +99,9 @@ systemctl restart nginx
 echo "Validating the deployment"
 
 for attempt in {1..30}; do
-  if curl --fail --silent http://127.0.0.1/health >/dev/null; then
+  if curl --fail --silent \
+    http://127.0.0.1/health >/dev/null; then
+
     echo "Deployment completed successfully"
     exit 0
   fi
@@ -99,7 +111,12 @@ done
 
 echo "Application health check failed"
 
-systemctl status ecommerce.service --no-pager -l || true
-journalctl -u ecommerce.service --no-pager -n 100 || true
+systemctl status ecommerce.service \
+  --no-pager \
+  -l || true
+
+journalctl -u ecommerce.service \
+  --no-pager \
+  -n 100 || true
 
 exit 1
