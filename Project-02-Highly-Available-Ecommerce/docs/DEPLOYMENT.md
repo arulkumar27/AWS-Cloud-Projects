@@ -131,15 +131,110 @@ Push a change within the project path or manually dispatch **Deploy Project 02 E
 
 Confirm all target-group instances are healthy. Open the ALB DNS name, then test `/health` and `/api/products`. Review application logs through Session Manager if products do not load.
 
-## 10. Optional DNS and HTTPS
+## 10. Complete Edge Architecture
 
-For a domain already hosted in Route 53:
+The validated core application used the Application Load Balancer DNS name.
 
-1. Request an ACM public certificate in the ALB Region for a dedicated hostname.
-2. Validate it with DNS.
-3. Add an ALB HTTPS listener using the certificate.
-4. Redirect HTTP to HTTPS.
-5. Create a Route 53 A/AAAA alias to the ALB.
+The complete target edge architecture is:
 
-Do not delete a shared hosted zone or registered domain during project cleanup.
+```text
+Route 53
+  ->
+CloudFront with ACM
+  ->
+AWS WAF
+  ->
+Application Load Balancer
+```
 
+### ACM Certificate
+
+1. Switch to the `us-east-1` Region.
+2. Request an ACM public certificate for the application hostname.
+3. Select DNS validation.
+4. Create the ACM validation CNAME record in Route 53.
+5. Wait until the certificate status becomes `Issued`.
+
+CloudFront requires its viewer certificate in `us-east-1`.
+
+### CloudFront
+
+1. Create a CloudFront distribution.
+2. Select the Application Load Balancer as the origin.
+3. Set Viewer protocol policy to `Redirect HTTP to HTTPS`.
+4. Attach the ACM certificate from `us-east-1`.
+5. Add the public application hostname as an alternate domain name.
+6. Disable caching for `/api/*`, `/health` and `/ready`.
+7. Wait until the distribution status becomes `Deployed`.
+
+### AWS WAF
+
+1. Open AWS WAF using Global or CloudFront scope.
+2. Create `ecommerce-cloudfront-web-acl`.
+3. Associate it with the CloudFront distribution.
+4. Add AWS managed rule groups.
+5. Add a rate-based rule.
+6. Start rules in `Count` mode.
+7. Review sampled requests before changing rules to `Block`.
+
+### Route 53
+
+Create an A alias record:
+
+```text
+Record name: <APPLICATION-HOSTNAME>
+Record type: A
+Alias target: CloudFront distribution
+Routing policy: Simple
+```
+
+The final public hostname should point to CloudFront, not directly to the ALB.
+
+See [EDGE-SECURITY.md](EDGE-SECURITY.md) for the complete configuration.
+
+## 11. Monitoring
+
+1. Create an SNS topic named `ecommerce-ops-alerts`.
+2. Add and confirm an email subscription.
+3. Create CloudWatch alarms for:
+   - Unhealthy ALB targets
+   - ALB 5XX responses
+   - EC2 CPU utilization
+   - Auto Scaling capacity
+   - RDS CPU, connections and free storage
+   - CloudFront errors
+   - WAF blocked requests
+4. Send alarm notifications to the SNS topic.
+5. Create the `Ecommerce-Production` CloudWatch dashboard.
+
+See [MONITORING.md](MONITORING.md) for monitoring details.
+
+## 12. Final Validation
+
+Validate each layer:
+
+```bash
+curl -i http://<ALB-DNS-NAME>/health
+curl -i http://<ALB-DNS-NAME>/ready
+curl -i http://<ALB-DNS-NAME>/api/products
+```
+
+For the complete edge design:
+
+```bash
+curl -I https://<APPLICATION-HOSTNAME>/
+curl -i https://<APPLICATION-HOSTNAME>/health
+curl -i https://<APPLICATION-HOSTNAME>/api/products
+```
+
+Confirm:
+
+- GitHub Actions completed successfully.
+- EC2 instances are Online in Systems Manager.
+- ALB targets are healthy.
+- The application connects to RDS.
+- CloudFront status is Deployed.
+- The Route 53 hostname resolves correctly.
+- The ACM certificate is valid.
+- WAF metrics are visible.
+- SNS notifications are received.
