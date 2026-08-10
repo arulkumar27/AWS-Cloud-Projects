@@ -1,53 +1,190 @@
 # Architecture and Design Decisions
 
-## Design goals
+## Overview
 
-The design prioritizes tier isolation, multi-AZ application availability, replaceable compute, managed secrets and auditable deployments. It is a production-style learning architecture, not a claim of full production readiness.
+This project demonstrates a highly available, three-tier e-commerce application on AWS.
 
-## Traffic boundaries
+The core ALB-to-application architecture was deployed and tested. Route 53, CloudFront, ACM and AWS WAF represent the complete target edge architecture.
 
-| Source | Destination | Port | Reason |
-|---|---|---:|---|
-| Internet | ALB security group | 80/443 | Public application entry point |
-| ALB security group | App security group | 80 | ALB to Nginx |
-| App security group | RDS security group | 3306 | MySQL only |
-| App instances | AWS APIs/internet | 443 | SSM, S3, secrets, packages and RDS CA bundle |
+## Complete Request Flow
 
-Do not add `0.0.0.0/0` inbound rules to the application or database tiers.
+```text
+Users
+  ->
+Route 53
+  ->
+CloudFront with ACM
+  ->
+AWS WAF
+  ->
+Application Load Balancer
+  ->
+Nginx on EC2
+  ->
+Node.js application
+  ->
+Amazon RDS for MySQL
+```
 
-## Route tables
+## Network Design
 
-- Public route table: local route plus `0.0.0.0/0 → Internet Gateway`; associated with both public subnets.
-- Private app route table AZ-a: local route plus `0.0.0.0/0 → NAT Gateway AZ-a`.
-- Private app route table AZ-b: local route plus `0.0.0.0/0 → NAT Gateway AZ-b`.
-- Isolated DB route table: local route only; associated with both DB subnets.
-- VPC main route table: intentionally left without workload subnet associations. AWS always creates a main route table; it is not an extra workload route table.
+```text
+VPC: 10.0.0.0/16
+Region: ap-south-1
+Availability Zones: ap-south-1a and ap-south-1b
+```
 
-## Compute path
+| Tier | AZ A | AZ B |
+|---|---|---|
+| Public | `10.0.1.0/24` | `10.0.2.0/24` |
+| Private application | `10.0.11.0/24` | `10.0.12.0/24` |
+| Isolated database | `10.0.21.0/24` | `10.0.22.0/24` |
 
-Nginx listens on port 80 and proxies to Node.js on `127.0.0.1:3000`. Binding Node.js to loopback prevents it from being exposed directly on the instance network interface. systemd starts the service, restarts failures and sends logs to journald.
+## Route Tables
 
-## Data path
+Public route table:
 
-The app retrieves the secret value from Secrets Manager at runtime and connects to the RDS endpoint supplied through Parameter Store. MySQL TLS uses `/etc/ecommerce/global-bundle.pem` downloaded from the official AWS RDS trust store during deployment.
+```text
+VPC local route
+0.0.0.0/0 -> Internet Gateway
+```
 
-## Deployment path
+Private application route tables:
 
-GitHub Actions tests and packages the application, assumes an AWS IAM role through OIDC, uploads the versioned archive to S3 and sends an SSM command to instances selected by both tags:
+```text
+AZ A: 0.0.0.0/0 -> NAT Gateway A
+AZ B: 0.0.0.0/0 -> NAT Gateway B
+```
 
-- `Project=ecommerce-prod`
-- `Environment=production`
+Database route table:
 
-The deployment script stops the service, replaces the application directory, writes runtime configuration, installs systemd/Nginx files, restarts services and polls `/health`.
+```text
+VPC local route only
+No internet default route
+```
 
-## Production improvements
+The AWS-created main route table is not associated with workload subnets.
 
-- Multi-AZ RDS with automated backups and tested restore procedures.
-- HTTPS listener with ACM certificate; redirect HTTP to HTTPS.
-- CloudFront and WAF managed rules where edge protection is required.
-- VPC endpoints for S3, SSM, EC2 Messages, SSM Messages, Secrets Manager and CloudWatch Logs to reduce NAT dependency.
-- Rolling or blue/green deployments with explicit capacity and rollback controls.
-- Infrastructure as Code, policy-as-code and drift detection.
-- Centralized structured application logs, dashboards, alarms and SNS notifications.
-- AWS Backup, RDS Performance Insights and GuardDuty/Security Hub as appropriate.
+## Security Boundaries
 
+| Source | Destination | Port |
+|---|---|---:|
+| Internet or CloudFront | ALB security group | 80/443 |
+| ALB security group | Application security group | 80 |
+| Application security group | RDS security group | 3306 |
+| Private EC2 instances | AWS APIs through NAT or endpoints | 443 |
+
+Application and database security groups do not allow unrestricted public inbound access.
+
+## Compute Layer
+
+The Application Load Balancer distributes requests across EC2 instances in two private subnets.
+
+Each instance runs:
+
+```text
+Nginx -> Node.js
+```
+
+Nginx listens on port 80 and forwards requests to:
+
+```text
+127.0.0.1:3000
+```
+
+The Node.js process is managed by systemd.
+
+Auto Scaling maintains application capacity and replaces unhealthy instances.
+
+## Database Layer
+
+Amazon RDS for MySQL is deployed using a DB subnet group containing both isolated database subnets.
+
+The application:
+
+- Retrieves credentials from Secrets Manager.
+- Reads the RDS hostname from Parameter Store.
+- Connects through the RDS security group.
+- Uses the AWS RDS CA bundle.
+- Verifies the TLS certificate.
+
+The lab used Single-AZ RDS because of account restrictions. Production should use Multi-AZ RDS.
+
+## Edge Layer
+
+The complete target edge architecture uses:
+
+- Route 53 for DNS.
+- CloudFront as the public HTTPS entry point.
+- ACM for TLS certificates.
+- AWS WAF for managed and rate-based rules.
+- The ALB as the CloudFront origin.
+
+The CloudFront viewer certificate must be created in `us-east-1`.
+
+The public Route 53 alias points to CloudFront.
+
+See [EDGE-SECURITY.md](EDGE-SECURITY.md) for the complete edge configuration.
+
+## CI/CD Architecture
+
+```text
+GitHub push
+  ->
+GitHub Actions
+  ->
+AWS OIDC and STS
+  ->
+S3 release artifact
+  ->
+Systems Manager Run Command
+  ->
+Tagged EC2 Auto Scaling instances
+```
+
+The project does not use CodeBuild, CodePipeline or CodeDeploy.
+
+GitHub Actions uses temporary AWS credentials instead of permanent access keys.
+
+## Runtime Configuration
+
+Parameter Store contains:
+
+```text
+/ecommerce/prod/db-secret-arn
+/ecommerce/prod/db-host
+/ecommerce/prod/assets-bucket
+```
+
+Secrets Manager contains the database username and password.
+
+The deployment script creates:
+
+```text
+/etc/ecommerce/environment
+```
+
+## Monitoring
+
+CloudWatch monitors:
+
+- ALB health and errors
+- EC2 CPU utilization
+- Auto Scaling capacity
+- RDS CPU, connections and storage
+- CloudFront errors
+- WAF requests
+
+SNS sends operational email notifications.
+
+## Production Improvements
+
+- Use Multi-AZ RDS.
+- Add database migration tooling.
+- Add automated readiness, API and database tests.
+- Configure Content Security Policy.
+- Use rolling or blue/green deployments.
+- Add VPC endpoints to reduce NAT dependency.
+- Send application and Nginx logs to CloudWatch Logs.
+- Implement the infrastructure using Terraform, CDK or CloudFormation.
+- Test backup restoration and disaster recovery.
