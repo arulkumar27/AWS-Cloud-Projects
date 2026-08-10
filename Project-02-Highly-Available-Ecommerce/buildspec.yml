@@ -5,7 +5,7 @@ phases:
     runtime-versions:
       nodejs: 20
     commands:
-      - cd "$CODEBUILD_SRC_DIR/highly-available-ecommerce-platform/application"
+      - cd "$CODEBUILD_SRC_DIR/Project-02-Highly-Available-Ecommerce"
       - npm ci
   pre_build:
     commands:
