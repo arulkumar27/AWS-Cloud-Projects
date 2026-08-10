@@ -1,31 +1,49 @@
 version: 0.2
 
+env:
+  shell: bash
+
 phases:
   install:
     runtime-versions:
       nodejs: 20
+
     commands:
-      - cd "$CODEBUILD_SRC_DIR/Project-02-Highly-Available-Ecommerce"
+      - echo "Installing application dependencies"
+      - cd application
       - npm ci
+
   pre_build:
     commands:
+      - echo "Running automated tests"
       - npm test
+
   build:
     commands:
+      - echo "Creating production release"
       - npm prune --omit=dev
-      - mkdir -p "$CODEBUILD_SRC_DIR/artifact/config"
-      - cp -R src public node_modules package.json package-lock.json "$CODEBUILD_SRC_DIR/artifact/"
-      - cp "$CODEBUILD_SRC_DIR/highly-available-ecommerce-platform/deployment/appspec.yml" "$CODEBUILD_SRC_DIR/artifact/appspec.yml"
-      - cp -R "$CODEBUILD_SRC_DIR/highly-available-ecommerce-platform/deployment/scripts" "$CODEBUILD_SRC_DIR/artifact/scripts"
-      - cp "$CODEBUILD_SRC_DIR/highly-available-ecommerce-platform/deployment/config/ecommerce.service" "$CODEBUILD_SRC_DIR/artifact/config/ecommerce.service"
-      - cp "$CODEBUILD_SRC_DIR/highly-available-ecommerce-platform/deployment/config/nginx.conf" "$CODEBUILD_SRC_DIR/artifact/config/nginx.conf"
+      - cd ..
+      - mkdir -p release/config
+      - cp -R application/src release/
+      - cp -R application/public release/
+      - cp -R application/node_modules release/
+      - cp application/package.json release/
+      - cp application/package-lock.json release/
+      - cp deployment/config/ecommerce.service release/config/
+      - cp deployment/config/nginx.conf release/config/
+      - cp deployment/scripts/ssm_deploy.sh release/
+      - chmod +x release/ssm_deploy.sh
+      - tar -czf ecommerce-release.tar.gz -C release .
+
+  post_build:
+    commands:
+      - echo "Build and tests completed successfully"
+      - echo "Release artifact created at $(date)"
 
 artifacts:
-  base-directory: artifact
   files:
-    - '**/*'
-  discard-paths: no
+    - ecommerce-release.tar.gz
 
 cache:
   paths:
-    - '/root/.npm/**/*'
+    - application/node_modules/**/*
