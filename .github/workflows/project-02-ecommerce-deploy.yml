@@ -6,7 +6,7 @@ on:
       - main
     paths:
       - "Project-02-Highly-Available-Ecommerce/**"
-      - ".github/workflows/ecommerce-deploy.yml"
+      - ".github/workflows/project-02-ecommerce-deploy.yml"
 
   workflow_dispatch:
 
