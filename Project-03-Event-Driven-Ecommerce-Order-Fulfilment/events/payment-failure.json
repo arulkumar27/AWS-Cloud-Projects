@@ -1,0 +1,8 @@
+{
+  "customerId": "CUST-102",
+  "customerEmail": "customer@example.com",
+  "productId": "LAPTOP-001",
+  "quantity": 1,
+  "amount": 55000,
+  "simulatePaymentFailure": true
+}

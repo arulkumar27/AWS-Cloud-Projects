@@ -1,0 +1,43 @@
+# AWS SAM build files
+.aws-sam/
+
+# SAM deployment configuration
+samconfig.toml
+
+# Python cache
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Python environments
+venv/
+.venv/
+env/
+
+# Environment variables and secrets
+.env
+.env.*
+*.pem
+*.key
+
+# AWS credentials
+.aws/
+credentials
+config
+
+# IDE settings
+.vscode/
+.idea/
+
+# Operating system files
+.DS_Store
+Thumbs.db
+
+# Test and coverage files
+.coverage
+htmlcov/
+coverage.xml
+
+# Temporary files
+*.log
+*.tmp

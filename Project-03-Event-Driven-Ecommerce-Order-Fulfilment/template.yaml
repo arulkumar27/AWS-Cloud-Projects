@@ -1,0 +1,465 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+
+Description: Event-driven e-commerce order processing and fulfilment system
+
+Parameters:
+  NotificationEmail:
+    Type: String
+    Description: Email address for order and failure notifications
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Architectures:
+      - x86_64
+    MemorySize: 128
+    Timeout: 15
+    LoggingConfig:
+      LogFormat: JSON
+    Tags:
+      Project: Project-03-Event-Driven-Ecommerce
+      Environment: dev
+
+Resources:
+
+  # ---------------------------------------------------------
+  # API Gateway
+  # ---------------------------------------------------------
+
+  OrderHttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: dev
+      CorsConfiguration:
+        AllowOrigins:
+          - "*"
+        AllowHeaders:
+          - Content-Type
+        AllowMethods:
+          - POST
+          - OPTIONS
+      Tags:
+        Project: Project-03-Event-Driven-Ecommerce
+
+  # ---------------------------------------------------------
+  # DynamoDB Tables
+  # ---------------------------------------------------------
+
+  OrdersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: project03-ecommerce-orders
+      BillingMode: PROVISIONED
+      ProvisionedThroughput:
+        ReadCapacityUnits: 5
+        WriteCapacityUnits: 5
+      AttributeDefinitions:
+        - AttributeName: orderId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: orderId
+          KeyType: HASH
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: false
+      Tags:
+        - Key: Project
+          Value: Project-03-Event-Driven-Ecommerce
+        - Key: Environment
+          Value: dev
+
+  InventoryTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: project03-ecommerce-inventory
+      BillingMode: PROVISIONED
+      ProvisionedThroughput:
+        ReadCapacityUnits: 5
+        WriteCapacityUnits: 5
+      AttributeDefinitions:
+        - AttributeName: productId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: productId
+          KeyType: HASH
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: false
+      Tags:
+        - Key: Project
+          Value: Project-03-Event-Driven-Ecommerce
+        - Key: Environment
+          Value: dev
+
+  # ---------------------------------------------------------
+  # EventBridge
+  # ---------------------------------------------------------
+
+  OrderEventBus:
+    Type: AWS::Events::EventBus
+    Properties:
+      Name: project03-ecommerce-events
+
+  # ---------------------------------------------------------
+  # SQS and DLQ
+  # ---------------------------------------------------------
+
+  OrderDeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: project03-order-dlq
+      MessageRetentionPeriod: 1209600
+      SqsManagedSseEnabled: true
+      Tags:
+        - Key: Project
+          Value: Project-03-Event-Driven-Ecommerce
+
+  OrderQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: project03-order-queue
+      VisibilityTimeout: 180
+      MessageRetentionPeriod: 345600
+      SqsManagedSseEnabled: true
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt OrderDeadLetterQueue.Arn
+        maxReceiveCount: 3
+      Tags:
+        - Key: Project
+          Value: Project-03-Event-Driven-Ecommerce
+
+  OrderQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues:
+        - !Ref OrderQueue
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowEventBridgeToSendMessages
+            Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action:
+              - sqs:SendMessage
+            Resource: !GetAtt OrderQueue.Arn
+            Condition:
+              ArnEquals:
+                aws:SourceArn: !GetAtt OrderCreatedRule.Arn
+
+  OrderCreatedRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: project03-order-created-rule
+      EventBusName: !Ref OrderEventBus
+      State: ENABLED
+      EventPattern:
+        source:
+          - ecommerce.orders
+        detail-type:
+          - OrderCreated
+      Targets:
+        - Id: OrderQueueTarget
+          Arn: !GetAtt OrderQueue.Arn
+
+  # ---------------------------------------------------------
+  # SNS Notifications
+  # ---------------------------------------------------------
+
+  OrderNotificationTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: project03-order-notifications
+      Subscription:
+        - Protocol: email
+          Endpoint: !Ref NotificationEmail
+      Tags:
+        - Key: Project
+          Value: Project-03-Event-Driven-Ecommerce
+
+  # ---------------------------------------------------------
+  # Lambda Functions
+  # ---------------------------------------------------------
+
+  CreateOrderFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: project03-create-order
+      CodeUri: src/create-order/
+      Handler: app.lambda_handler
+      Environment:
+        Variables:
+          ORDERS_TABLE: !Ref OrdersTable
+          EVENT_BUS_NAME: !Ref OrderEventBus
+      Policies:
+        - Statement:
+            - Sid: WriteOrder
+              Effect: Allow
+              Action:
+                - dynamodb:PutItem
+              Resource: !GetAtt OrdersTable.Arn
+            - Sid: PublishOrderEvent
+              Effect: Allow
+              Action:
+                - events:PutEvents
+              Resource: !GetAtt OrderEventBus.Arn
+      Events:
+        CreateOrderApi:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref OrderHttpApi
+            Path: /orders
+            Method: POST
+
+  StartWorkflowFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: project03-start-workflow
+      CodeUri: src/start-workflow/
+      Handler: app.lambda_handler
+      Timeout: 30
+      Environment:
+        Variables:
+          STATE_MACHINE_ARN: !Ref OrderStateMachine
+      Policies:
+        - SQSPollerPolicy:
+            QueueName: !GetAtt OrderQueue.QueueName
+        - Statement:
+            - Sid: StartOrderWorkflow
+              Effect: Allow
+              Action:
+                - states:StartExecution
+              Resource: !Ref OrderStateMachine
+      Events:
+        OrderQueueEvent:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt OrderQueue.Arn
+            BatchSize: 5
+            FunctionResponseTypes:
+              - ReportBatchItemFailures
+
+  ValidateOrderFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: project03-validate-order
+      CodeUri: src/validate-order/
+      Handler: app.lambda_handler
+
+  CheckInventoryFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: project03-check-inventory
+      CodeUri: src/check-inventory/
+      Handler: app.lambda_handler
+      Environment:
+        Variables:
+          INVENTORY_TABLE: !Ref InventoryTable
+      Policies:
+        - Statement:
+            - Sid: ReserveInventory
+              Effect: Allow
+              Action:
+                - dynamodb:UpdateItem
+              Resource: !GetAtt InventoryTable.Arn
+
+  ProcessPaymentFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: project03-process-payment
+      CodeUri: src/process-payment/
+      Handler: app.lambda_handler
+
+  CreateShipmentFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: project03-create-shipment
+      CodeUri: src/create-shipment/
+      Handler: app.lambda_handler
+
+  UpdateOrderFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: project03-update-order
+      CodeUri: src/update-order/
+      Handler: app.lambda_handler
+      Environment:
+        Variables:
+          ORDERS_TABLE: !Ref OrdersTable
+          SNS_TOPIC_ARN: !Ref OrderNotificationTopic
+      Policies:
+        - Statement:
+            - Sid: UpdateCompletedOrder
+              Effect: Allow
+              Action:
+                - dynamodb:UpdateItem
+              Resource: !GetAtt OrdersTable.Arn
+            - Sid: PublishSuccessNotification
+              Effect: Allow
+              Action:
+                - sns:Publish
+              Resource: !Ref OrderNotificationTopic
+
+  FailureHandlerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: project03-failure-handler
+      CodeUri: src/failure-handler/
+      Handler: app.lambda_handler
+      Environment:
+        Variables:
+          ORDERS_TABLE: !Ref OrdersTable
+          INVENTORY_TABLE: !Ref InventoryTable
+          SNS_TOPIC_ARN: !Ref OrderNotificationTopic
+      Policies:
+        - Statement:
+            - Sid: UpdateFailedOrder
+              Effect: Allow
+              Action:
+                - dynamodb:UpdateItem
+              Resource:
+                - !GetAtt OrdersTable.Arn
+                - !GetAtt InventoryTable.Arn
+            - Sid: PublishFailureNotification
+              Effect: Allow
+              Action:
+                - sns:Publish
+              Resource: !Ref OrderNotificationTopic
+
+  # ---------------------------------------------------------
+  # Step Functions
+  # ---------------------------------------------------------
+
+  OrderStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Name: project03-order-fulfilment
+      Type: STANDARD
+      DefinitionUri: statemachine/order-fulfilment.asl.json
+      DefinitionSubstitutions:
+        ValidateOrderFunctionArn: !GetAtt ValidateOrderFunction.Arn
+        CheckInventoryFunctionArn: !GetAtt CheckInventoryFunction.Arn
+        ProcessPaymentFunctionArn: !GetAtt ProcessPaymentFunction.Arn
+        CreateShipmentFunctionArn: !GetAtt CreateShipmentFunction.Arn
+        UpdateOrderFunctionArn: !GetAtt UpdateOrderFunction.Arn
+        FailureHandlerFunctionArn: !GetAtt FailureHandlerFunction.Arn
+      Policies:
+        - LambdaInvokePolicy:
+            FunctionName: !Ref ValidateOrderFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref CheckInventoryFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref ProcessPaymentFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref CreateShipmentFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref UpdateOrderFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref FailureHandlerFunction
+      Tags:
+        Project: Project-03-Event-Driven-Ecommerce
+        Environment: dev
+
+  # ---------------------------------------------------------
+  # CloudWatch Alarm
+  # ---------------------------------------------------------
+
+  DeadLetterQueueAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: project03-dlq-messages-detected
+      AlarmDescription: Alerts when failed order messages enter the DLQ
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt OrderDeadLetterQueue.QueueName
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref OrderNotificationTopic
+
+  # ---------------------------------------------------------
+  # Seven-Day CloudWatch Log Retention
+  # ---------------------------------------------------------
+
+  CreateOrderLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${CreateOrderFunction}"
+      RetentionInDays: 7
+
+  StartWorkflowLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${StartWorkflowFunction}"
+      RetentionInDays: 7
+
+  ValidateOrderLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ValidateOrderFunction}"
+      RetentionInDays: 7
+
+  CheckInventoryLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${CheckInventoryFunction}"
+      RetentionInDays: 7
+
+  ProcessPaymentLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ProcessPaymentFunction}"
+      RetentionInDays: 7
+
+  CreateShipmentLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${CreateShipmentFunction}"
+      RetentionInDays: 7
+
+  UpdateOrderLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${UpdateOrderFunction}"
+      RetentionInDays: 7
+
+  FailureHandlerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${FailureHandlerFunction}"
+      RetentionInDays: 7
+
+Outputs:
+
+  OrderApiUrl:
+    Description: API endpoint used to submit orders
+    Value: !Sub "https://${OrderHttpApi}.execute-api.${AWS::Region}.amazonaws.com/dev/orders"
+
+  OrdersTableName:
+    Description: DynamoDB orders table
+    Value: !Ref OrdersTable
+
+  InventoryTableName:
+    Description: DynamoDB inventory table
+    Value: !Ref InventoryTable
+
+  OrderQueueUrl:
+    Description: SQS order queue URL
+    Value: !Ref OrderQueue
+
+  DeadLetterQueueUrl:
+    Description: SQS dead-letter queue URL
+    Value: !Ref OrderDeadLetterQueue
+
+  StateMachineArn:
+    Description: Step Functions state machine ARN
+    Value: !Ref OrderStateMachine
+
+  NotificationTopicArn:
+    Description: SNS notification topic ARN
+    Value: !Ref OrderNotificationTopic
